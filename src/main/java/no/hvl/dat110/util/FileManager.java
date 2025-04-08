@@ -95,6 +95,21 @@ public class FileManager {
     	// call the saveFileContent() on the successor and set isPrimary=true if logic above is true otherwise set isPrimary=false
     	
     	// increment counter
+    	
+    	createReplicaFiles();
+    	for (int i = 0; i < replicafiles.length; i++) {
+    		BigInteger replicaID = replicafiles[i];
+    		NodeInterface successor = chordnode.findSuccessor(replicaID);
+    		
+    		if (successor != null) {
+    			successor.addKey(replicaID);
+    			
+    			boolean isPrimary = (i == index);
+    			
+    			successor.saveFileContent(filename, replicaID, bytesOfFile, isPrimary);
+    			counter++;
+    		}
+    	}
 		return counter;
     }
 	
@@ -120,6 +135,20 @@ public class FileManager {
 		// get the metadata (Message) of the replica from the successor (i.e., active peer) of the file
 		
 		// save the metadata in the set activeNodesforFile.
+		
+		createReplicaFiles();
+		
+		for (BigInteger replicaID : replicafiles) {
+			NodeInterface succ = chordnode.findSuccessor(replicaID);
+			
+			if (succ != null) {
+				Message metadata = succ.getFilesMetadata(replicaID);
+				
+				if (metadata != null) {
+					activeNodesforFile.add(metadata);
+				}
+			}
+		}
 		
 		return activeNodesforFile;
 	}
