@@ -6,9 +6,11 @@ package no.hvl.dat110.chordoperations;
 import java.math.BigInteger;
 import java.rmi.RemoteException;
 import java.rmi.registry.Registry;
+import java.util.List;
 import java.util.Set;
 import java.util.Timer;
 
+import no.hvl.dat110.util.Hash;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -155,7 +157,27 @@ public class ChordProtocols {
 		
 		try {
 			logger.info("Fixing the FingerTable for the Node: "+ chordnode.getNodeName());
-	
+
+
+			List<NodeInterface> fingerTable = chordnode.getFingerTable();
+			fingerTable.clear();
+
+			int m = Hash.bitSize();
+			BigInteger modulo = new BigInteger("2").pow(m);
+			BigInteger nodeID = chordnode.getNodeID();
+
+			for (int i = 0; i < m; i++) {
+				BigInteger start = nodeID.add(new BigInteger("2").pow(i).mod(modulo));
+				NodeInterface succnode = chordnode.findSuccessor(start);
+
+				if (succnode != null) {
+					fingerTable.add(succnode);
+				} else {
+					fingerTable.add(null);
+				}
+			}
+
+
 			// get the finger table from the chordnode (list object)
 			
 			// ensure to clear the current finger table
@@ -173,7 +195,7 @@ public class ChordProtocols {
 			// check that succnode is not null, then add it to the finger table
 
 		} catch (RemoteException e) {
-			//
+			logger.error("Error while fixing finger table" + e.getMessage());
 		}
 	}
 
