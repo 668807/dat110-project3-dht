@@ -37,14 +37,11 @@ public class ChordLookup {
 		BigInteger nodeID = node.getNodeID();
 		BigInteger succID = successor.getNodeID();
 
-		// BigInteger nodeIDplus1 = nodeID.add(BigInteger.ONE);
-
-
 		if (Util.checkInterval(key, nodeID, succID)) {
 			return successor;
 		} else {
-			NodeInterface clocestNode = findHighestPredecessor(key);
-			return clocestNode.findSuccessor(key);
+			NodeInterface closestNode = findHighestPredecessor(key);
+			return closestNode.findSuccessor(key);
 		}
 
 		// ask this node to find the successor of key
