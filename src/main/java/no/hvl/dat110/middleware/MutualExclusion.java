@@ -53,32 +53,43 @@ public class MutualExclusion {
 		
 		logger.info(node.nodename + " wants to access CS");
 		// clear the queueack before requesting for votes
+		queueack.clear();
 		
 		// clear the mutexqueue
+		mutexqueue.clear();
 		
 		// increment clock
+		clock.increment();
 		
 		// adjust the clock on the message, by calling the setClock on the message
-				
+		message.setClock(clock.getClock());
+
 		// wants to access resource - set the appropriate lock variable
-	
+		WANTS_TO_ENTER_CS = true;
 		
 		// start MutualExclusion algorithm
 		
 			// first, call removeDuplicatePeersBeforeVoting. A peer can hold/contain 2 replicas of a file. This peer will appear twice
+			List<Message> activenodes = removeDuplicatePeersBeforeVoting();
 
 			// multicast the message to activenodes (hint: use multicastMessage)
-		
+			multicastMessage(message, activenodes);
+
 			// check that all replicas have replied (permission) - areAllMessagesReturned(int numvoters)?
-		
+			boolean permission = areAllMessagesReturned(activenodes.size());
+
 			// if yes, acquireLock
-		
+			if (permission) {
+				acquireLock();
+
 				// send the updates to all replicas by calling node.broadcastUpdatetoPeers
-		
+				node.broadcastUpdatetoPeers(updates);
+
 				// clear the mutexqueue
-		
+				mutexqueue.clear();
+				return true;
+			}
 		// return permission
-		
 		return false;
 	}
 	
@@ -88,29 +99,52 @@ public class MutualExclusion {
 		logger.info("Number of peers to vote = "+activenodes.size());
 		
 		// iterate over the activenodes
-		
-		// obtain a stub for each node from the registry
-		
-		// call onMutexRequestReceived()
-		
+		for (Message m : activenodes) {
+			try {
+				// obtain a stub for each node from the registry
+				NodeInterface stub = Util.getProcessStub(m.getNodeName(), m.getPort());
+
+				// call onMutexRequestReceived()
+				if (stub != null) {
+					stub.onMutexRequestReceived(message);
+				}
+			} catch (Exception e) {
+				logger.error("Failed to contact " + m.getNodeName() + " at port " + m.getPort(), e);
+			}
+		}
 	}
 	
 	public void onMutexRequestReceived(Message message) throws RemoteException {
 		
 		// increment the local clock
+		clock.increment();
 		
 		// if message is from self, acknowledge, and call onMutexAcknowledgementReceived()
-			
+		if (message.getNodeName().equals(node.getNodeName())) {
+			message.setAcknowledged(true);
+			node.onMutexAcknowledgementReceived(message);
+			return;
+		}
+
 		int caseid = -1;
 		
 		/* write if statement to transition to the correct caseid in the doDecisionAlgorithm */
 		
 			// caseid=0: Receiver is not accessing shared resource and does not want to (send OK to sender)
-		
+			if (!CS_BUSY && !WANTS_TO_ENTER_CS) {
+				caseid = 0;
+			}
+
 			// caseid=1: Receiver already has access to the resource (dont reply but queue the request)
-		
-			// caseid=2: Receiver wants to access resource but is yet to - compare own message clock to received message's clock
-		
+			else if (CS_BUSY) {
+				caseid = 1;
+			}
+
+		// caseid=2: Receiver wants to access resource but is yet to - compare own message clock to received message's clock
+			else if (WANTS_TO_ENTER_CS && !CS_BUSY) {
+				caseid = 2;
+			}
+
 		// check for decision
 		doDecisionAlgorithm(message, mutexqueue, caseid);
 	}
@@ -126,11 +160,16 @@ public class MutualExclusion {
 			case 0: {
 				
 				// get a stub for the sender from the registry
-				
+				NodeInterface stub = Util.getProcessStub(procName, port);
+
 				// acknowledge message
+				message.setAcknowledged(true);
 				
 				// send acknowledgement back by calling onMutexAcknowledgementReceived()
-				
+				if (stub != null) {
+					stub.onMutexAcknowledgementReceived(message);
+				}
+
 				break;
 			}
 		
@@ -138,6 +177,7 @@ public class MutualExclusion {
 			case 1: {
 				
 				// queue this message
+				queueack.add(message);
 				break;
 			}
 			
@@ -148,17 +188,35 @@ public class MutualExclusion {
 			case 2: {
 				
 				// check the clock of the sending process (note that the correct clock is in the received message)
-				
-				// own clock of the receiver (note that the correct clock is in the node's message)
-				
-				// compare clocks, the lowest wins
-				
-				// if clocks are the same, compare nodeIDs, the lowest wins
-				
-				// if sender wins, acknowledge the message, obtain a stub and call onMutexAcknowledgementReceived()
-				
-				// if sender looses, queue it
+				int senderClock = message.getClock();
 
+				// own clock of the receiver (note that the correct clock is in the node's message)
+				int ownClock = node.getMessage().getClock();
+
+				// compare clocks, the lowest wins
+				boolean senderWins = false;
+
+				if (senderClock < ownClock) {
+					senderWins = true;
+				} else if (senderClock == ownClock) {
+					// if clocks are the same, compare nodeIDs, the lowest wins
+					BigInteger sendeID = message.getNodeID();
+					BigInteger ownID = node.getNodeID();
+
+					senderWins = sendeID.compareTo(ownID) < 0;
+				}
+
+				if (senderWins) {
+					// if sender wins, acknowledge the message, obtain a stub and call onMutexAcknowledgementReceived()
+					NodeInterface stub = Util.getProcessStub(procName, port);
+					message.setAcknowledged(true);
+					if (stub != null) {
+						stub.onMutexAcknowledgementReceived(message);
+					}
+				} else {
+					// if sender looses, queue it
+					queue.add(message);
+				}
 				break;
 			}
 			
@@ -170,6 +228,7 @@ public class MutualExclusion {
 	public void onMutexAcknowledgementReceived(Message message) throws RemoteException {
 		
 		// add message to queueack
+		queueack.add(message);
 		
 	}
 	
@@ -178,21 +237,32 @@ public class MutualExclusion {
 		logger.info("Releasing locks from = "+activenodes.size());
 		
 		// iterate over the activenodes
-		
-		// obtain a stub for each node from the registry
-		
-		// call releaseLocks()	
+		for (Message m : activenodes) {
+			try {
+				// obtain a stub for each node from the registry
+				NodeInterface stub = Util.getProcessStub(m.getNodeName(), m.getPort());
+
+				// call releaseLocks()
+				if (stub != null) {
+					stub.releaseLocks();
+				}
+			} catch (Exception e) {
+				logger.error("Failed to relese lock for " + m.getNodeName(), e);
+			}
+		}
 	}
 	
 	private boolean areAllMessagesReturned(int numvoters) throws RemoteException {
 		logger.info(node.getNodeName()+": size of queueack = "+queueack.size());
 		
 		// check if the size of the queueack is the same as the numvoters
-		
-		// clear the queueack
-		
-		// return true if yes and false if no
-		
+		if (queueack.size() == numvoters) {
+			// clear the queueack
+			queueack.clear();
+
+			// return true if yes and false if no
+			return true;
+		}
 		return false;
 	}
 	
